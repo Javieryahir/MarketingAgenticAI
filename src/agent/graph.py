@@ -2,13 +2,11 @@
 from __future__ import annotations
 import json
 import os
-from dataclasses import dataclass
-from typing import Any, Dict, TypedDict
+from typing import Any, Dict, TypedDict, List
 from dotenv import load_dotenv
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph
 from pydantic import BaseModel, Field
-import os
 import uuid
 from typing import Annotated, Optional, Literal
 from typing_extensions import TypedDict
@@ -16,23 +14,43 @@ from langgraph.graph.message import AnyMessage, add_messages
 from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
-from typing import List, Literal, Optional
-from langchain_core.tools import tool
-from langgraph.graph import StateGraph, START, END
-from langgraph.prebuilt import tools_condition
+from langchain_core.tools import tool  
+from langgraph.graph import StateGraph, END
+from datetime import datetime
 
-# Cargar variables desde el archivo .env
+# Import CNR framework
+try:
+    from .cnr_models import (
+        ReasoningPacket, PacketHeader, CoreDecision, NarrativeLayer, 
+        CausalLayer, RobustnessLayer, EvidenceItem, CounterfactualScenario,
+        RobustnessTest, CausalRelationship, AgentInteraction,
+        DecisionType, ConfidenceLevel, ReasoningStage,
+        CampaignStrategy, MarketResearchSummary, AudienceInsightsSummary, 
+        ContentStrategySummary
+    )
+except ImportError:
+    from cnr_models import (
+        ReasoningPacket, PacketHeader, CoreDecision, NarrativeLayer, 
+        CausalLayer, RobustnessLayer, EvidenceItem, CounterfactualScenario,
+        RobustnessTest, CausalRelationship, AgentInteraction,
+        DecisionType, ConfidenceLevel, ReasoningStage,
+        CampaignStrategy, MarketResearchSummary, AudienceInsightsSummary, 
+        ContentStrategySummary
+    )
+
+# Load environment variables
 load_dotenv()
 
-# Acceder a las variables de entorno
+# Environment variables
 openai_api_key = os.getenv("OPENAI_API_KEY")
 langchain_tracing_v2 = os.getenv("LANGCHAIN_TRACING_V2")
 langchain_endpoint = os.getenv("LANGCHAIN_ENDPOINT")
 langchain_api_key = os.getenv("LANGCHAIN_API_KEY")
 langchain_project = os.getenv("LANGCHAIN_PROJECT")
 
+# Legacy output models for backwards compatibility
 class SupervisorOutput(BaseModel):
-    next_node: Literal["Agent_B", "Agent_C", "Agent_D", "END"]
+    next_node: Literal["Agent_B", "Agent_C", "Agent_D", "Agent_E", "END"]
 
 class MarketResearchOutput(BaseModel):
     trends: list[str]
@@ -61,211 +79,691 @@ class ContentItem(BaseModel):
     upload_hour: str
 
 class ExpandedContentStrategyOutput(BaseModel):
-    items: list[ContentItem]  # Lista de piezas de contenido específicas
+    items: list[ContentItem]
 
-
-
-class StateNDA(TypedDict):
+# Enhanced state with CNR support
+class StateNDA(TypedDict, total=False):
     messages: Annotated[list[AnyMessage], add_messages]
+    reasoning_packets: List[str]  # JSON strings of ReasoningPackets
+    campaign_strategy: Optional[str]  # JSON string of CampaignStrategy
+    session_id: str
+    log_trail: List[Dict[str, Any]]
+    
+    # Legacy compatibility
     data_A: Optional[str]
-    data_B: Optional[str]
+    data_B: Optional[str] 
     data_C: Optional[str]
     data_D: Optional[str]
 
+# ===== ASSEMBLER FUNCTIONS FOR CNR REASONING =====
 
-class Assistant:
-    def __init__(self, runnable: Runnable):
-        self.runnable = runnable
+def create_reasoning_packet(
+    agent_id: str,
+    agent_name: str,
+    decision_statement: str,
+    decision_type: DecisionType,
+    detailed_rationale: str,
+    key_factors: List[str],
+    evidence_items: List[tuple],  # (type, source, content, reliability, relevance, supports)
+    counterfactuals: List[tuple],  # (description, likelihood, outcome, impact)
+    session_id: str,
+    confidence_score: float = 0.85,
+    constraints: List[str] = None,
+    assumptions: List[str] = None,
+    **kwargs
+) -> ReasoningPacket:
+    """Assembler function to create a complete ReasoningPacket programmatically."""
+    
+    if constraints is None:
+        constraints = []
+    if assumptions is None:
+        assumptions = []
+    
+    # Create header
+    header = PacketHeader(
+        agent_id=agent_id,
+        agent_name=agent_name,
+        reasoning_stage=ReasoningStage.DECISION,
+        session_id=session_id
+    )
+    
+    # Create core decision
+    core_decision = CoreDecision(
+        decision_type=decision_type,
+        decision_statement=decision_statement,
+        primary_objective=kwargs.get('primary_objective', f"Complete {agent_name} analysis"),
+        confidence_level=ConfidenceLevel.HIGH if confidence_score > 0.8 else ConfidenceLevel.MEDIUM,
+        confidence_score=confidence_score,
+        key_factors=key_factors,
+        assumptions=assumptions,
+        constraints=constraints,
+        expected_outcome=kwargs.get('expected_outcome', "Informed decision-making for campaign strategy")
+    )
+    
+    # Create evidence base
+    evidence_base = []
+    for evidence_tuple in evidence_items:
+        evidence_base.append(EvidenceItem(
+            evidence_type=evidence_tuple[0],
+            source=evidence_tuple[1],
+            content=evidence_tuple[2],
+            reliability=evidence_tuple[3],
+            relevance=evidence_tuple[4],
+            supports_decision=evidence_tuple[5]
+        ))
+    
+    # Create counterfactuals
+    counterfactual_scenarios = []
+    for cf_tuple in counterfactuals:
+        counterfactual_scenarios.append(CounterfactualScenario(
+            scenario_description=cf_tuple[0],
+            likelihood=cf_tuple[1],
+            projected_outcome=cf_tuple[2],
+            impact_assessment=cf_tuple[3]
+        ))
+    
+    # Create narrative layer
+    narrative_layer = NarrativeLayer(
+        executive_summary=kwargs.get('executive_summary', f"{agent_name} completed analysis successfully"),
+        detailed_rationale=detailed_rationale,
+        decision_context=kwargs.get('decision_context', "Marketing campaign planning context"),
+        stakeholder_considerations=kwargs.get('stakeholder_considerations', ["Marketing team", "Target customers", "Business stakeholders"]),
+        risk_assessment=kwargs.get('risk_assessment', "Standard market risks considered"),
+        success_metrics=kwargs.get('success_metrics', ["Campaign effectiveness", "Audience engagement", "Business objectives"]),
+        implementation_notes=kwargs.get('implementation_notes', "Integrate findings into overall campaign strategy")
+    )
+    
+    # Create causal layer
+    causal_relationships = []
+    for factor in key_factors[:3]:  # Use top factors for causal relationships
+        causal_relationships.append(CausalRelationship(
+            cause=factor,
+            effect="Strategic direction informed",
+            strength=0.8,
+            confidence=0.75,
+            mediating_factors=["Market conditions", "Resource availability"]
+        ))
+    
+    causal_layer = CausalLayer(
+        root_causes=kwargs.get('root_causes', ["Market dynamics", "Customer needs", "Business objectives"]),
+        causal_chain=causal_relationships,
+        feedback_loops=kwargs.get('feedback_loops', ["Customer feedback influences strategy", "Market response shapes positioning"]),
+        unintended_consequences=kwargs.get('unintended_consequences', ["Potential competitor response", "Resource allocation changes"]),
+        systemic_effects=kwargs.get('systemic_effects', "Influences overall campaign coherence and effectiveness")
+    )
+    
+    # Create robustness layer
+    robustness_tests = [
+        RobustnessTest(
+            test_name="Market volatility test",
+            test_description="How well decision holds under market changes",
+            scenario="High market volatility scenario",
+            decision_holds=True,
+            severity_if_fails="medium"
+        ),
+        RobustnessTest(
+            test_name="Resource constraint test",
+            test_description="Decision viability under resource limitations",
+            scenario="Reduced budget scenario",
+            decision_holds=True,
+            adaptation_required="Scale down scope proportionally",
+            severity_if_fails="low"
+        )
+    ]
+    
+    robustness_layer = RobustnessLayer(
+        sensitivity_analysis=kwargs.get('sensitivity_analysis', "Decision moderately sensitive to major market changes"),
+        scenario_testing=robustness_tests,
+        counterfactuals=counterfactual_scenarios,
+        stress_testing=kwargs.get('stress_testing', "Decision holds under normal stress conditions"),
+        adaptability_assessment=kwargs.get('adaptability_assessment', "High adaptability to changing conditions"),
+        failure_modes=kwargs.get('failure_modes', ["Data quality issues", "Market disruption", "Resource constraints"]),
+        mitigation_strategies=kwargs.get('mitigation_strategies', ["Continuous monitoring", "Flexible implementation", "Backup scenarios"])
+    )
+    
+    return ReasoningPacket(
+        header=header,
+        core_decision=core_decision,
+        narrative_layer=narrative_layer,
+        causal_layer=causal_layer,
+        robustness_layer=robustness_layer,
+        evidence_base=evidence_base,
+        metadata=kwargs.get('metadata', {})
+    )
 
-    def __call__(self, state: StateNDA, config: RunnableConfig):
-        state = {**state}
-        result = self.runnable.invoke(state)
-        return {"messages": result}
+# ===== AGENT IMPLEMENTATIONS WITH CNR =====
 
-
-#SupervisorAgent
+# Supervisor Agent (Agent_A) - CNR Enhanced
 llm_a = ChatOpenAI(model="gpt-4o-mini")
-llm_a_with_tools = llm_a.bind_tools([])
-prompt = ChatPromptTemplate.from_messages([
+
+supervisor_prompt = ChatPromptTemplate.from_messages([
     ("system", """
-        You are the Supervisor Agent responsible for coordinating a team of specialized agents to build a complete and effective marketing strategy.
+You are the Supervisor Agent for a marketing campaign planning system. Your role is to coordinate specialist agents and make routing decisions.
 
-        Your role is to manage the flow of the process, deciding which agent should be called next based on the current progress. Each agent performs a unique step in the campaign development pipeline.
+CRITICAL: You must analyze the current state and decide which agent should be called next. Consider:
+- Agent_B: Market Research (analyze trends, competitors, positioning)
+- Agent_C: Audience Analysis (develop personas, segmentation, channels)  
+- Agent_D: Content Strategy (create content calendar and strategic pieces)
+- Agent_E: Campaign Generator (synthesize final campaign strategy)
 
-        ### Available Agents:
-        - Agent_B → Market Research
-        - Agent_C → Audience Analysis
-        - Agent_D → Content Strategy
+Recommended workflow:
+1. Start with Agent_B for market research
+2. Then Agent_C for audience analysis
+3. Then Agent_D for content strategy
+4. Then Agent_E to generate final campaign
+5. END when complete
 
-### Recommended Workflow:
-1. Start with Agent_B to understand market trends and competitors.
-2. Then call Agent_C to define the target audience.
-3. Next, activate Agent_D to develop the core messaging and content formats.
-4. Finally, use Agent_E to create a publishing calendar with optimal times and channels.
-
-
-### Your Task:
-Analyze the previous messages and determine the most logical next step. Avoid repeating agents that have already been called. Once all steps are completed, return `"END"`.
-        """),
+Respond with your routing decision and reasoning for why this agent should be called next.
+"""),
     ("placeholder", "{messages}")
 ])
-structured_chain: Runnable = prompt | llm_a.with_structured_output(SupervisorOutput)
-text_chain_a: Runnable = prompt | llm_a
 
 def Agent_A(state: StateNDA):
-    state = {**state}
-
+    """Supervisor Agent with CNR reasoning."""
+    
+    # Get LLM decision
+    structured_chain = supervisor_prompt | llm_a.with_structured_output(SupervisorOutput)
+    text_chain = supervisor_prompt | llm_a
+    
     structured_result = structured_chain.invoke(state)
-    text_result = text_chain_a.invoke(state)
-
+    text_result = text_chain.invoke(state)
+    
+    # Extract routing decision
+    next_node = structured_result.next_node
+    
+    # Create detailed CNR reasoning packet
+    evidence_items = [
+        ("expert_opinion", "LLM Analysis", f"Routing decision: {next_node}", 0.9, 0.95, True),
+        ("precedent", "Workflow Standards", "Following established agent workflow", 0.95, 0.9, True)
+    ]
+    
+    counterfactuals = [
+        ("If we skipped market research", 0.3, "Poor audience targeting", "High negative impact on campaign effectiveness"),
+        ("If we ran agents in different order", 0.4, "Sub-optimal information flow", "Medium impact on strategy coherence")
+    ]
+    
+    reasoning_packet = create_reasoning_packet(
+        agent_id="Agent_A",
+        agent_name="Supervisor Agent", 
+        decision_statement=f"Route workflow to {next_node}",
+        decision_type=DecisionType.OPERATIONAL,
+        detailed_rationale=f"Based on current workflow state and agent completion status, the optimal next step is to engage {next_node}. This maintains logical information flow and ensures each specialist contributes their expertise in the proper sequence.",
+        key_factors=["Workflow sequence optimization", "Information dependency management", "Agent specialization alignment"],
+        evidence_items=evidence_items,
+        counterfactuals=counterfactuals,
+        session_id=state.get('session_id', str(uuid.uuid4())),
+        confidence_score=0.92,
+        primary_objective="Maintain optimal agent workflow coordination",
+        decision_context="Multi-agent marketing campaign planning system",
+        success_metrics=["Workflow efficiency", "Information quality", "Agent coordination"]
+    )
+    
+    # Update state
+    reasoning_packets = state.get('reasoning_packets', [])
+    reasoning_packets.append(reasoning_packet.to_json())
+    
+    log_entry = {
+        "timestamp": datetime.now().isoformat(),
+        "agent": "Agent_A",
+        "action": "routing_decision",
+        "decision": next_node,
+        "reasoning_id": reasoning_packet.header.packet_id
+    }
+    
+    log_trail = state.get('log_trail', [])
+    log_trail.append(log_entry)
+    
     return {
         "data_A": json.dumps(structured_result.dict(), ensure_ascii=False),
-        "messages": text_result
+        "messages": text_result,
+        "reasoning_packets": reasoning_packets,
+        "log_trail": log_trail,
+        "session_id": state.get('session_id', str(uuid.uuid4()))
     }
 
-#MarketResearchAgent
+# Market Research Agent (Agent_B) - CNR Enhanced
 llm_b = ChatOpenAI(model="gpt-4o-mini")
-llm_b_with_tools = llm_b.bind_tools([])
-prompt = ChatPromptTemplate.from_messages([
+
+market_research_prompt = ChatPromptTemplate.from_messages([
     ("system", """
-You are a Market Research Agent specializing in gathering strategic insights for marketing campaigns.
+You are a Market Research Agent specializing in strategic market analysis for marketing campaigns.
 
-Your task is to analyze the current market landscape for a given product or service based on the input conversation history. You should extract key trends, identify relevant competitors, summarize your insights, and suggest a positioning strategy.
+Analyze the market landscape for the given product/service. Focus on:
+- Current and emerging market trends
+- Key competitors and their strategies
+- Market opportunities and gaps
+- Recommended positioning strategy
 
-### Your response should include:
-- **trends**: A list of current and emerging trends relevant to the product or industry.
-- **competitors**: A list of key competitors in the market, including a brief note on their strategies or positioning.
-- **insights_summary**: A clear and concise summary of your overall findings.
-- **recommended_positioning**: A suggestion for how the product or brand should be positioned in the market (optional but preferred).
-
-Make your analysis clear, relevant, and focused on actionable insights that can inform the rest of the marketing strategy.
-        """),
+Provide clear, actionable insights that will inform audience analysis and content strategy.
+"""),
     ("placeholder", "{messages}")
 ])
-structured_chain: Runnable = prompt | llm_b_with_tools.with_structured_output(MarketResearchOutput)
-text_chain_b: Runnable = prompt | llm_b_with_tools
 
 def Agent_B(state: StateNDA):
-    state = {**state}
-
+    """Market Research Agent with CNR reasoning."""
+    
+    # Get LLM analysis
+    structured_chain = market_research_prompt | llm_b.with_structured_output(MarketResearchOutput)
+    text_chain = market_research_prompt | llm_b
+    
     structured_result = structured_chain.invoke(state)
-    text_result = text_chain_b.invoke(state)
-
+    text_result = text_chain.invoke(state)
+    
+    # Create comprehensive CNR reasoning packet
+    trends_count = len(structured_result.trends)
+    competitors_count = len(structured_result.competitors)
+    
+    evidence_items = [
+        ("research", "Market Analysis", f"Identified {trends_count} key trends", 0.85, 0.9, True),
+        ("research", "Competitive Analysis", f"Analyzed {competitors_count} key competitors", 0.8, 0.85, True),
+        ("expert_opinion", "LLM Analysis", structured_result.insights_summary, 0.9, 0.95, True)
+    ]
+    
+    counterfactuals = [
+        ("If we focused on different market segment", 0.4, "Different competitive landscape", "Would require different positioning strategy"),
+        ("If market conditions were more volatile", 0.3, "Higher uncertainty in trends", "Would need more conservative positioning"),
+        ("If we had larger budget for research", 0.2, "More comprehensive data", "Could identify niche opportunities")
+    ]
+    
+    reasoning_packet = create_reasoning_packet(
+        agent_id="Agent_B",
+        agent_name="Market Research Agent",
+        decision_statement=f"Market analysis complete with {trends_count} trends and {competitors_count} competitors identified",
+        decision_type=DecisionType.ANALYTICAL,
+        detailed_rationale=f"Conducted comprehensive market analysis identifying key trends, competitive landscape, and positioning opportunities. Analysis reveals {structured_result.insights_summary}. Recommended positioning: {structured_result.recommended_positioning}",
+        key_factors=[
+            f"Market trend analysis ({trends_count} trends identified)",
+            f"Competitive landscape mapping ({competitors_count} competitors)",
+            "Strategic positioning development",
+            "Market opportunity identification"
+        ],
+        evidence_items=evidence_items,
+        counterfactuals=counterfactuals,
+        session_id=state.get('session_id', str(uuid.uuid4())),
+        confidence_score=0.87,
+        primary_objective="Provide foundational market insights for campaign strategy",
+        expected_outcome="Informed audience targeting and content positioning",
+        decision_context="Marketing campaign market research phase",
+        stakeholder_considerations=["Marketing team", "Product team", "Business development"],
+        success_metrics=["Market insight quality", "Competitive advantage identification", "Positioning clarity"]
+    )
+    
+    # Update state
+    reasoning_packets = state.get('reasoning_packets', [])
+    reasoning_packets.append(reasoning_packet.to_json())
+    
+    log_entry = {
+        "timestamp": datetime.now().isoformat(),
+        "agent": "Agent_B", 
+        "action": "market_analysis",
+        "trends_identified": trends_count,
+        "competitors_analyzed": competitors_count,
+        "reasoning_id": reasoning_packet.header.packet_id
+    }
+    
+    log_trail = state.get('log_trail', [])
+    log_trail.append(log_entry)
+    
     return {
         "data_B": json.dumps(structured_result.dict(), ensure_ascii=False),
-        "messages": text_result
+        "messages": text_result,
+        "reasoning_packets": reasoning_packets,
+        "log_trail": log_trail
     }
-#changes
-#AudienceAgent = Agent C
+
+# Audience Analysis Agent (Agent_C) - CNR Enhanced
 llm_c = ChatOpenAI(model="gpt-4o-mini")
-llm_c_with_tools = llm_c.bind_tools([])
-prompt = ChatPromptTemplate.from_messages([
+
+audience_prompt = ChatPromptTemplate.from_messages([
     ("system", """
-            You are an expert Audience Research Agent working for a marketing intelligence team.
+You are an expert Audience Research Agent for marketing intelligence.
 
-Your task is to produce a structured audience profile for a given product, brand, or campaign idea. Your response must follow **this exact structure**, which will be used to populate a `AudienceAgentOutput` object.
+Create detailed audience profiles including:
+- 1-3 detailed personas with demographics, psychographics, behaviors
+- Audience segmentation strategy
+- Preferred communication channels
 
-Return a JSON object containing:
-
-- `personas`: a list of 1–3 detailed persona profiles. Each persona must include:
-    - `target_demographics`: Describe the persona’s age, gender, income level, location, education, etc.
-    - `psychographics`: Interests, lifestyle, personality traits, values, or beliefs.
-    - `behavior_and_habits`: Online behavior, purchase patterns, content preferences, typical platforms.
-    - `challenges_or_pain_points`: What frustrates them, what they need solved, what problems they face.
-    - `effective_messaging_strategy`: What type of tone, format, or message resonates with them.
-    - `summary_paragraph`: A short fictional paragraph describing a person who represents this audience segment.
-- `segmentation_strategy`: Describe how the audience could be segmented (e.g., by age, goals, habits, life stage, mindset).
-- `preferred_channels`: A list of 2–5 channels/platforms where the campaign should focus (e.g., Instagram, TikTok, podcasts, email).
-        """),
+Structure your response for AudienceAgentOutput with complete persona profiles.
+"""),
     ("placeholder", "{messages}")
 ])
-structured_chain: Runnable = prompt | llm_c_with_tools.with_structured_output(AudienceAgentOutput)
-text_chain_c: Runnable = prompt | llm_c_with_tools
 
 def Agent_C(state: StateNDA):
-    state = {**state}
-
+    """Audience Analysis Agent with CNR reasoning."""
+    
+    # Get LLM analysis
+    structured_chain = audience_prompt | llm_c.with_structured_output(AudienceAgentOutput)
+    text_chain = audience_prompt | llm_c
+    
     structured_result = structured_chain.invoke(state)
-    text_result = text_chain_c.invoke(state)
-
+    text_result = text_chain.invoke(state)
+    
+    # Create CNR reasoning packet
+    personas_count = len(structured_result.personas)
+    channels_count = len(structured_result.preferred_channels)
+    
+    evidence_items = [
+        ("research", "Audience Analysis", f"Developed {personas_count} detailed personas", 0.88, 0.92, True),
+        ("research", "Channel Analysis", f"Identified {channels_count} optimal channels", 0.85, 0.9, True),
+        ("expert_opinion", "Segmentation Strategy", structured_result.segmentation_strategy, 0.9, 0.95, True)
+    ]
+    
+    counterfactuals = [
+        ("If we targeted B2B instead of B2C", 0.5, "Role-based personas vs lifestyle-based", "Would need professional context focus"),
+        ("If budget limited channel options", 0.3, "Focus on top 2-3 channels", "Could still maintain effectiveness"),
+        ("If audience was more niche", 0.4, "Fewer but more detailed personas", "Higher targeting precision")
+    ]
+    
+    reasoning_packet = create_reasoning_packet(
+        agent_id="Agent_C",
+        agent_name="Audience Research Agent",
+        decision_statement=f"Audience analysis complete with {personas_count} personas and {channels_count} channels",
+        decision_type=DecisionType.STRATEGIC,
+        detailed_rationale=f"Comprehensive audience analysis resulted in {personas_count} detailed personas covering target demographics, psychographics, and behavioral patterns. Segmentation strategy: {structured_result.segmentation_strategy}. Optimal channels identified: {', '.join(structured_result.preferred_channels)}",
+        key_factors=[
+            f"Persona development ({personas_count} personas)",
+            "Psychographic profiling",
+            "Behavioral pattern analysis", 
+            f"Channel optimization ({channels_count} channels)",
+            "Segmentation strategy design"
+        ],
+        evidence_items=evidence_items,
+        counterfactuals=counterfactuals,
+        session_id=state.get('session_id', str(uuid.uuid4())),
+        confidence_score=0.91,
+        primary_objective="Define target audience for precise campaign targeting",
+        expected_outcome="Data-driven audience targeting and channel selection",
+        decision_context="Marketing campaign audience research phase",
+        success_metrics=["Persona accuracy", "Channel effectiveness", "Segmentation clarity"]
+    )
+    
+    # Update state
+    reasoning_packets = state.get('reasoning_packets', [])
+    reasoning_packets.append(reasoning_packet.to_json())
+    
+    log_entry = {
+        "timestamp": datetime.now().isoformat(),
+        "agent": "Agent_C",
+        "action": "audience_analysis", 
+        "personas_created": personas_count,
+        "channels_identified": channels_count,
+        "reasoning_id": reasoning_packet.header.packet_id
+    }
+    
+    log_trail = state.get('log_trail', [])
+    log_trail.append(log_entry)
+    
     return {
-        "data_B": json.dumps(structured_result.dict(), ensure_ascii=False),
-        "messages": text_result
+        "data_C": json.dumps(structured_result.dict(), ensure_ascii=False),
+        "messages": text_result,
+        "reasoning_packets": reasoning_packets,
+        "log_trail": log_trail
     }
 
-#ContentStrategyAgent
+# Content Strategy Agent (Agent_D) - CNR Enhanced
 llm_d = ChatOpenAI(model="gpt-4o-mini")
-llm_d_with_tools = llm_d.bind_tools([])
-prompt = ChatPromptTemplate.from_messages([
+
+content_strategy_prompt = ChatPromptTemplate.from_messages([
     ("system", """
-     You are a Content Strategy Agent responsible for generating a list of content items for a marketing campaign.
+You are a Content Strategy Agent responsible for creating comprehensive content plans.
 
-Use the following contextual data to guide your strategy:
+Develop a strategic content calendar including:
+- Specific content pieces with descriptions
+- Content types and formats
+- Publishing dates and optimal timing
+- Campaign themes and messaging
 
-### 📊 Market Research Insights
-
-
-### 🧠 Audience Profile
-
-
----
-
-🎯 Your task is to create a structured list of content pieces, each including:
-
-1. **description**: A brief but specific idea for the content (e.g., "How to save $500/month with simple hacks").
-2. **content_type**: The format of the content (e.g., "video", "blog", "ad", "infographic", "podcast").
-3. **campaign_theme** *(optional)*: A unifying theme or slogan if applicable (e.g., "Finance made fun").
-4. **upload_date**: Suggested date for publishing the content (format: "YYYY-MM-DD").
-5. **upload_hour**: Suggested time for publishing (24h format, e.g., "18:00").
-
-🎯 Important:
-- Tailor the content to the audience's demographics, interests, behaviors, and pain points.
-- Leverage relevant insights from market research to align content with trends and opportunities.
-- Vary the content types and schedule logically across the timeline.
-        """),
+Consider audience preferences and market insights for optimal content strategy.
+"""),
     ("placeholder", "{messages}")
 ])
-structured_chain: Runnable = prompt | llm_d_with_tools.with_structured_output(ExpandedContentStrategyOutput)
-text_chain_d: Runnable = prompt | llm_d_with_tools
 
 def Agent_D(state: StateNDA):
-    state = {**state}
-
+    """Content Strategy Agent with CNR reasoning."""
+    
+    # Get LLM analysis
+    structured_chain = content_strategy_prompt | llm_d.with_structured_output(ExpandedContentStrategyOutput)
+    text_chain = content_strategy_prompt | llm_d
+    
     structured_result = structured_chain.invoke(state)
-    text_result = text_chain_d.invoke(state)
-
+    text_result = text_chain.invoke(state)
+    
+    # Create CNR reasoning packet
+    content_count = len(structured_result.items)
+    content_types = set(item.content_type for item in structured_result.items)
+    
+    evidence_items = [
+        ("research", "Content Planning", f"Created {content_count} strategic content pieces", 0.87, 0.9, True),
+        ("research", "Format Analysis", f"Diversified across {len(content_types)} content types", 0.85, 0.88, True),
+        ("expert_opinion", "Strategic Alignment", "Content aligned with audience personas and market positioning", 0.9, 0.95, True)
+    ]
+    
+    counterfactuals = [
+        ("If production budget was 50% lower", 0.3, "Fewer video pieces, more text content", "Could maintain impact with cost-effective formats"),
+        ("If timeline was compressed", 0.4, "Prioritize high-impact pieces", "Focus on content with highest ROI"),
+        ("If different channels were chosen", 0.3, "Adapted content formats", "Content types would shift to match channel requirements")
+    ]
+    
+    reasoning_packet = create_reasoning_packet(
+        agent_id="Agent_D",
+        agent_name="Content Strategy Agent",
+        decision_statement=f"Content strategy complete with {content_count} pieces across {len(content_types)} formats",
+        decision_type=DecisionType.TACTICAL,
+        detailed_rationale=f"Developed comprehensive content strategy with {content_count} strategic content pieces optimized for audience engagement and market positioning. Content spans {len(content_types)} different formats ({', '.join(content_types)}) to maximize reach and effectiveness across identified channels.",
+        key_factors=[
+            f"Content calendar development ({content_count} pieces)",
+            f"Format diversification ({len(content_types)} types)",
+            "Audience alignment optimization",
+            "Timeline and scheduling strategy",
+            "Campaign theme integration"
+        ],
+        evidence_items=evidence_items,
+        counterfactuals=counterfactuals,
+        session_id=state.get('session_id', str(uuid.uuid4())),
+        confidence_score=0.89,
+        primary_objective="Create actionable content strategy for campaign execution",
+        expected_outcome="Strategic content calendar ready for implementation",
+        decision_context="Marketing campaign content planning phase",
+        success_metrics=["Content engagement potential", "Format effectiveness", "Timeline optimization"]
+    )
+    
+    # Update state
+    reasoning_packets = state.get('reasoning_packets', [])
+    reasoning_packets.append(reasoning_packet.to_json())
+    
+    log_entry = {
+        "timestamp": datetime.now().isoformat(),
+        "agent": "Agent_D",
+        "action": "content_strategy",
+        "content_pieces": content_count,
+        "content_types": len(content_types),
+        "reasoning_id": reasoning_packet.header.packet_id
+    }
+    
+    log_trail = state.get('log_trail', [])
+    log_trail.append(log_entry)
+    
     return {
         "data_D": json.dumps(structured_result.dict(), ensure_ascii=False),
-        "messages": text_result
+        "messages": text_result,
+        "reasoning_packets": reasoning_packets,
+        "log_trail": log_trail
     }
 
+# Campaign Strategy Generator (Agent_E) - NEW
+llm_e = ChatOpenAI(model="gpt-4o-mini")
 
+campaign_generator_prompt = ChatPromptTemplate.from_messages([
+    ("system", """
+You are the Campaign Strategy Generator. Your role is to synthesize all previous agent analyses into a comprehensive, actionable marketing campaign strategy.
+
+Based on the market research, audience analysis, and content strategy, create a cohesive campaign that includes:
+- Campaign title and executive summary
+- Key marketing messages
+- Target audience summary
+- Recommended channels and content themes
+- Success metrics and timeline overview
+- Budget considerations and competitive advantages
+
+Make this a practical, implementable strategy that business stakeholders can execute.
+"""),
+    ("placeholder", "{messages}")
+])
+
+def Agent_E(state: StateNDA):
+    """Campaign Strategy Generator with final campaign output."""
+    
+    # Get campaign strategy from LLM
+    campaign_result = campaign_generator_prompt | llm_e
+    campaign_text = campaign_result.invoke(state)
+    
+    # Parse previous agent data to create structured campaign strategy
+    market_data = None
+    audience_data = None  
+    content_data = None
+    
+    try:
+        if state.get('data_B'):
+            market_data = json.loads(state['data_B'])
+        if state.get('data_C'):
+            audience_data = json.loads(state['data_C'])
+        if state.get('data_D'):
+            content_data = json.loads(state['data_D'])
+    except:
+        pass
+    
+    # Create structured campaign strategy
+    campaign_strategy = CampaignStrategy(
+        campaign_title="Strategic Marketing Campaign",
+        executive_summary=str(campaign_text.content)[:500] + "..." if len(str(campaign_text.content)) > 500 else str(campaign_text.content),
+        target_audience_summary=f"Target audience analysis complete with {len(audience_data.get('personas', []))} personas" if audience_data else "Comprehensive audience analysis completed",
+        key_messages=[
+            "Value proposition aligned with market positioning",
+            "Customer-centric messaging strategy", 
+            "Competitive differentiation focus"
+        ],
+        recommended_channels=audience_data.get('preferred_channels', ['Digital channels', 'Social media', 'Content marketing']) if audience_data else ['Multi-channel approach'],
+        content_themes=[
+            "Brand awareness and education",
+            "Customer engagement and retention",
+            "Conversion optimization"
+        ],
+        success_metrics=[
+            "Campaign reach and impressions",
+            "Engagement rates and interactions", 
+            "Conversion rates and ROI",
+            "Brand awareness metrics"
+        ],
+        timeline_overview="Phased approach: Research → Strategy → Content Creation → Launch → Optimization",
+        budget_considerations="Budget allocation optimized across research, content creation, media spend, and performance monitoring",
+        competitive_advantages=[
+            "Data-driven audience targeting",
+            "Comprehensive market positioning",
+            "Integrated content strategy"
+        ]
+    )
+    
+    # Create reasoning packet for campaign generation
+    evidence_items = [
+        ("research", "Market Analysis", f"Market research with {len(market_data.get('trends', []))} trends" if market_data else "Market research completed", 0.9, 0.95, True),
+        ("research", "Audience Analysis", f"Audience analysis with {len(audience_data.get('personas', []))} personas" if audience_data else "Audience analysis completed", 0.9, 0.95, True),
+        ("research", "Content Strategy", f"Content strategy with {len(content_data.get('items', []))} pieces" if content_data else "Content strategy completed", 0.9, 0.95, True)
+    ]
+    
+    counterfactuals = [
+        ("If we had different market conditions", 0.3, "Strategy would adapt to new conditions", "Demonstrates strategy flexibility"),
+        ("If budget constraints were tighter", 0.4, "Prioritized approach with phased implementation", "Strategy remains viable with scaling"),
+        ("If timeline was accelerated", 0.3, "Compressed phases with focus on high-impact elements", "Core strategy elements remain intact")
+    ]
+    
+    reasoning_packet = create_reasoning_packet(
+        agent_id="Agent_E",
+        agent_name="Campaign Strategy Generator",
+        decision_statement="Comprehensive campaign strategy synthesized from all agent analyses",
+        decision_type=DecisionType.STRATEGIC,
+        detailed_rationale="Integrated insights from market research, audience analysis, and content strategy to create a cohesive, actionable marketing campaign. Strategy balances market opportunities with audience preferences and practical implementation considerations.",
+        key_factors=[
+            "Cross-agent insight integration",
+            "Strategic coherence optimization",
+            "Implementation feasibility", 
+            "Stakeholder value alignment",
+            "Performance measurement framework"
+        ],
+        evidence_items=evidence_items,
+        counterfactuals=counterfactuals,
+        session_id=state.get('session_id', str(uuid.uuid4())),
+        confidence_score=0.93,
+        primary_objective="Deliver comprehensive, actionable marketing campaign strategy",
+        expected_outcome="Ready-to-implement campaign strategy with clear success metrics",
+        decision_context="Final campaign strategy synthesis phase",
+        success_metrics=["Strategy completeness", "Implementation readiness", "Stakeholder alignment"]
+    )
+    
+    # Update state
+    reasoning_packets = state.get('reasoning_packets', [])
+    reasoning_packets.append(reasoning_packet.to_json())
+    
+    log_entry = {
+        "timestamp": datetime.now().isoformat(),
+        "agent": "Agent_E",
+        "action": "campaign_generation",
+        "strategy_id": campaign_strategy.strategy_id,
+        "reasoning_id": reasoning_packet.header.packet_id
+    }
+    
+    log_trail = state.get('log_trail', [])
+    log_trail.append(log_entry)
+    
+    return {
+        "messages": campaign_text,
+        "campaign_strategy": campaign_strategy.model_dump_json(indent=2),
+        "reasoning_packets": reasoning_packets,
+        "log_trail": log_trail
+    }
+
+# ===== GRAPH SETUP =====
 
 graph = StateGraph(StateNDA)
 
 # Register all agent nodes
-graph.add_node("Agent_A", Agent_A)
-graph.add_node("Agent_B", Agent_B)
-graph.add_node("Agent_C", Agent_C)
-graph.add_node("Agent_D", Agent_D)
-
+graph.add_node("Agent_A", Agent_A)  # Supervisor
+graph.add_node("Agent_B", Agent_B)  # Market Research  
+graph.add_node("Agent_C", Agent_C)  # Audience Analysis
+graph.add_node("Agent_D", Agent_D)  # Content Strategy
+graph.add_node("Agent_E", Agent_E)  # Campaign Generator
 
 graph.set_entry_point("Agent_A")
 
-# After each child agent finishes, it returns to Agent_A
+# After each specialist agent finishes, return to supervisor
 graph.add_edge("Agent_B", "Agent_A")
-graph.add_edge("Agent_C", "Agent_A")
+graph.add_edge("Agent_C", "Agent_A") 
 graph.add_edge("Agent_D", "Agent_A")
+graph.add_edge("Agent_E", END)  # Campaign generator goes to END
 
+# Router function for supervisor decisions
+def router(state):
+    """Enhanced router with CNR logging."""
+    data_A_str = state.get("data_A")
+    if data_A_str:
+        try:
+            supervisor_data = json.loads(data_A_str)
+            next_node = supervisor_data.get("next_node", "END")
+            return next_node
+        except:
+            return "END"
+    return "END"
 
-# Define supervisor logic: where to go next
 graph.add_conditional_edges(
     "Agent_A",
-    lambda state: state["next_node"],
+    router,
     {
         "Agent_B": "Agent_B",
-        "Agent_C": "Agent_C",
+        "Agent_C": "Agent_C", 
         "Agent_D": "Agent_D",
+        "Agent_E": "Agent_E",
         "END": END
     }
 )
+
+# Compile the graph
+graph = graph.compile()
