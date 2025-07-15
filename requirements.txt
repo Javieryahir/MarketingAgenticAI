@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+pydantic
+python-dotenv
+langgraph
+langchain
+langchain-openai
+psycopg[binary]
+typing-extensions
+langgraph-cli[inmem]
