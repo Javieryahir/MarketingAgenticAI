@@ -1,58 +1,9 @@
 import streamlit as st
 import time
-
-# --- Placeholder Backend Function ---
-
-def run_hackathon_planner(brief: str):
-    """
-    This is a placeholder for your actual LangGraph backend.
-    It simulates a call to the planner and returns a structured
-    dictionary with a summary and a detailed log trail.
-
-    In a real application, you would replace this function's body
-    with a call to your LangGraph application. For example:
-    
-    from your_langgraph_module import your_graph
-    
-    def run_hackathon_planner(brief: str):
-        inputs = {"brief": brief}
-        # Assuming your LangGraph returns a dictionary with 'final_summary'
-        # and 'log_trail' in its final state.
-        result = your_graph.invoke(inputs)
-        return result
-    """
-    # Simulate a network delay
-    time.sleep(2)
-
-    # Return a dummy dictionary matching the required structure
-    return {
-        "final_summary": f"This is the final campaign plan for: '{brief[:50]}...'. "
-                         "We will focus on a multi-platform digital strategy, "
-                         "targeting young professionals with a mix of engaging "
-                         "video content and interactive social media campaigns.",
-        "log_trail": [
-            {
-                "agent_name": "Market Research Agent",
-                "decision": "Identified target audience as young professionals (25-35) on Instagram and TikTok.",
-                "reasoning": "This demographic shows the highest engagement rates for similar product launches. "
-                             "Counter-argument for targeting a broader audience was considered but rejected due to "
-                             "budget constraints and the need for a high-impact initial launch."
-            },
-            {
-                "agent_name": "Content Strategy Agent",
-                "decision": "Develop a series of short, humorous video ads and a user-generated content contest.",
-                "reasoning": "Video content is king on the identified platforms. A UGC contest will foster community "
-                             "and generate authentic, low-cost marketing material. Static image ads were considered "
-                             "less effective for this audience."
-            },
-            {
-                "agent_name": "Ad Placement Agent",
-                "decision": "Allocate 70% of the ad budget to Instagram Reels and 30% to TikTok.",
-                "reasoning": "While TikTok has high engagement, Instagram's ad platform offers more precise targeting "
-                             "options, which is crucial for maximizing ROI in the initial phase of the campaign."
-            }
-        ]
-    }
+import random
+import json
+from langchain_core.messages import HumanMessage
+from agent.graph import graph  # Import the compiled graph
 
 # --- Streamlit User Interface ---
 
@@ -65,41 +16,139 @@ st.write("Welcome to the 24-Hour Hackathon Edition! Let's plan a marketing campa
 
 with st.sidebar:
     st.header("Campaign Brief")
+
+    # New Feature: Dynamic and selectable example prompts.
+    # Users can refresh to see different examples and choose one to use.
+    example_prompts = [
+        "Plan a digital marketing campaign for a new artisanal yuzu craft soda. The launch is in Kyoto, targeting both tourists and young local professionals. Highlight its unique flavor and local sourcing.",
+        "Devise a launch strategy for a new mobile app that uses AI to create personalized travel itineraries. The target audience is millennial and Gen Z backpackers. Focus on social media and influencer collaborations.",
+        "Create a content marketing plan for a B2B SaaS company that provides project management tools for remote teams. The goal is to increase free trial sign-ups. Focus on blog posts, case studies, and webinars.",
+        "Outline a promotional campaign for a new line of sustainable, vegan leather handbags. The brand targets environmentally conscious consumers aged 25-45. Emphasize ethical production and high-quality materials."
+    ]
+
+    # Initialize the prompt index in session state if it doesn't exist.
+    if 'prompt_index' not in st.session_state:
+        st.session_state.prompt_index = 0
+
+    # Display the current example prompt.
+    st.info(f"**Example Prompt:**\n\n{example_prompts[st.session_state.prompt_index]}")
+
+    # Create two columns for the buttons for a cleaner layout.
+    col1, col2 = st.columns(2)
+
+    with col1:
+        # Refresh button: cycles to a new random prompt.
+        if st.button("Refresh Prompt"):
+            # Select a new random index.
+            new_index = random.randint(0, len(example_prompts) - 1)
+            st.session_state.prompt_index = new_index
+            st.rerun()
+
+    with col2:
+        # Submit button: populates the text area with the current example.
+        if st.button("Use This Prompt"):
+            st.session_state.campaign_brief = example_prompts[st.session_state.prompt_index]
+
     campaign_brief = st.text_area(
         "Enter your product description, target audience, and goals:", 
-        height=200
+        height=200,
+        key="campaign_brief" 
     )
     generate_button = st.button("Generate Plan")
 
 # --- Main Display Area ---
 
-if generate_button:
-    if not campaign_brief:
-        st.warning("Please enter a campaign brief in the sidebar.")
-    else:
-        with st.spinner("Our AI agents are collaborating... Please wait."):
-            # Call the placeholder backend function
-            plan_result = run_hackathon_planner(campaign_brief)
-            # Store the result in session state
-            st.session_state.plan_result = plan_result
-
-# Check if a plan exists in the session state and display it
+# If a plan was generated in a previous run, display it from session state
 if 'plan_result' in st.session_state:
     result = st.session_state.plan_result
-    
     st.success("Campaign Plan Generated!")
-
-    # Display Final Summary in a chat-like format
     with st.chat_message("ai", avatar="🤖"):
         st.markdown(result['final_summary'])
-
     st.markdown("---")
     st.subheader("Reasoning & Decision Log")
-    st.write("Here is the step-by-step log from the AI agent collaboration:")
-
-    # Display the detailed log trail in collapsible expanders
     for log_entry in result['log_trail']:
         with st.expander(f"**Agent: {log_entry['agent_name']}**"):
             st.markdown(f"**Decision:** {log_entry['decision']}")
             st.markdown("**Reasoning:**")
-            st.markdown(log_entry['reasoning']) 
+            st.markdown(f"```{json.dumps(log_entry['reasoning'], indent=2)}```")
+
+
+if generate_button:
+    if not campaign_brief:
+        st.warning("Please enter a campaign brief in the sidebar.")
+    else:
+        # --- Streaming Execution and Real-Time Updates ---
+        st.success("Campaign Plan Generation Started!")
+        
+        # Placeholders for the final summary and the log
+        summary_placeholder = st.empty()
+        log_container = st.container()
+        log_container.markdown("---")
+        log_container.subheader("Reasoning & Decision Log")
+
+        with st.spinner("Our AI agents are collaborating... Please wait."):
+            inputs = {"messages": [HumanMessage(content=campaign_brief)]}
+            log_trail = []
+            final_summary = ""
+
+            # Use graph.stream() to get real-time updates
+            for chunk in graph.stream(inputs, stream_mode="values"):
+                # The 'chunk' contains the output of the last node that ran
+                last_key = list(chunk.keys())[-1]
+                
+                if last_key == "Agent_A":
+                    log_container.info("🧠 Supervisor is deciding the next step...")
+                elif last_key == "Agent_B":
+                    log_container.info("📈 Market Research Agent is analyzing trends...")
+                    data = json.loads(chunk[last_key].get("data_B", "{}"))
+                    log_entry = {
+                        "agent_name": "Market Research Agent",
+                        "decision": "Market analysis complete.",
+                        "reasoning": data
+                    }
+                    log_trail.append(log_entry)
+                elif last_key == "Agent_C":
+                    log_container.info("👥 Audience Agent is profiling the target audience...")
+                    data = json.loads(chunk[last_key].get("data_C", "{}"))
+                    log_entry = {
+                        "agent_name": "Audience Agent",
+                        "decision": "Audience profiling complete.",
+                        "reasoning": data
+                    }
+                    log_trail.append(log_entry)
+                elif last_key == "Agent_D":
+                    log_container.info("📝 Content Strategy Agent is creating content ideas...")
+                    data = json.loads(chunk[last_key].get("data_D", "{}"))
+                    log_entry = {
+                        "agent_name": "Content Strategy Agent",
+                        "decision": "Content strategy generation complete.",
+                        "reasoning": data
+                    }
+                    log_trail.append(log_entry)
+
+                # Extract final summary from the messages
+                if "messages" in chunk:
+                    final_summary = chunk["messages"][-1].content
+        
+        # --- Display Final Results and save to session state ---
+        st.success("Campaign Plan Generated!")
+        
+        # Display Final Summary in a chat-like format
+        with summary_placeholder.container():
+             with st.chat_message("ai", avatar="🤖"):
+                st.markdown(final_summary)
+
+        # Display the detailed log trail in collapsible expanders
+        for log_entry in log_trail:
+            with log_container.expander(f"**Agent: {log_entry['agent_name']}**"):
+                st.markdown(f"**Decision:** {log_entry['decision']}")
+                st.markdown("**Reasoning:**")
+                # Use st.json to pretty-print the dictionary
+                st.json(log_entry['reasoning'])
+
+        # Store the complete result in session state for persistence
+        st.session_state.plan_result = {
+            "final_summary": final_summary,
+            "log_trail": log_trail
+        }
+        st.rerun() # Rerun to clean up placeholders and show final static view 

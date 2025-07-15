@@ -85,8 +85,7 @@ class Assistant:
 
 #SupervisorAgent
 llm_a = ChatOpenAI(model="gpt-4o-mini")
-llm_a_with_tools = llm_a.bind_tools([])
-prompt = ChatPromptTemplate.from_messages([
+prompt_a = ChatPromptTemplate.from_messages([
     ("system", """
         You are the Supervisor Agent responsible for coordinating a team of specialized agents to build a complete and effective marketing strategy.
 
@@ -109,13 +108,13 @@ Analyze the previous messages and determine the most logical next step. Avoid re
         """),
     ("placeholder", "{messages}")
 ])
-structured_chain: Runnable = prompt | llm_a.with_structured_output(SupervisorOutput)
-text_chain_a: Runnable = prompt | llm_a
+structured_chain_a: Runnable = prompt_a | llm_a.with_structured_output(SupervisorOutput)
+text_chain_a: Runnable = prompt_a | llm_a
 
 def Agent_A(state: StateNDA):
     state = {**state}
 
-    structured_result = structured_chain.invoke(state)
+    structured_result = structured_chain_a.invoke(state)
     text_result = text_chain_a.invoke(state)
 
     return {
@@ -125,8 +124,7 @@ def Agent_A(state: StateNDA):
 
 #MarketResearchAgent
 llm_b = ChatOpenAI(model="gpt-4o-mini")
-llm_b_with_tools = llm_b.bind_tools([])
-prompt = ChatPromptTemplate.from_messages([
+prompt_b = ChatPromptTemplate.from_messages([
     ("system", """
 You are a Market Research Agent specializing in gathering strategic insights for marketing campaigns.
 
@@ -142,13 +140,13 @@ Make your analysis clear, relevant, and focused on actionable insights that can 
         """),
     ("placeholder", "{messages}")
 ])
-structured_chain: Runnable = prompt | llm_b_with_tools.with_structured_output(MarketResearchOutput)
-text_chain_b: Runnable = prompt | llm_b_with_tools
+structured_chain_b: Runnable = prompt_b | llm_b.with_structured_output(MarketResearchOutput)
+text_chain_b: Runnable = prompt_b | llm_b
 
 def Agent_B(state: StateNDA):
     state = {**state}
 
-    structured_result = structured_chain.invoke(state)
+    structured_result = structured_chain_b.invoke(state)
     text_result = text_chain_b.invoke(state)
 
     return {
@@ -158,8 +156,7 @@ def Agent_B(state: StateNDA):
 
 #AudienceAgent = Agent C
 llm_c = ChatOpenAI(model="gpt-4o-mini")
-llm_c_with_tools = llm_c.bind_tools([])
-prompt = ChatPromptTemplate.from_messages([
+prompt_c = ChatPromptTemplate.from_messages([
     ("system", """
             You are an expert Audience Research Agent working for a marketing intelligence team.
 
@@ -179,24 +176,23 @@ Return a JSON object containing:
         """),
     ("placeholder", "{messages}")
 ])
-structured_chain: Runnable = prompt | llm_c_with_tools.with_structured_output(AudienceAgentOutput)
-text_chain_c: Runnable = prompt | llm_c_with_tools
+structured_chain_c: Runnable = prompt_c | llm_c.with_structured_output(AudienceAgentOutput)
+text_chain_c: Runnable = prompt_c | llm_c
 
 def Agent_C(state: StateNDA):
     state = {**state}
 
-    structured_result = structured_chain.invoke(state)
+    structured_result = structured_chain_c.invoke(state)
     text_result = text_chain_c.invoke(state)
 
     return {
-        "data_B": json.dumps(structured_result.dict(), ensure_ascii=False),
+        "data_C": json.dumps(structured_result.dict(), ensure_ascii=False),
         "messages": text_result
     }
 
 #ContentStrategyAgent
 llm_d = ChatOpenAI(model="gpt-4o-mini")
-llm_d_with_tools = llm_d.bind_tools([])
-prompt = ChatPromptTemplate.from_messages([
+prompt_d = ChatPromptTemplate.from_messages([
     ("system", """
      You are a Content Strategy Agent responsible for generating a list of content items for a marketing campaign.
 
@@ -225,13 +221,13 @@ Use the following contextual data to guide your strategy:
         """),
     ("placeholder", "{messages}")
 ])
-structured_chain: Runnable = prompt | llm_d_with_tools.with_structured_output(ExpandedContentStrategyOutput)
-text_chain_d: Runnable = prompt | llm_d_with_tools
+structured_chain_d: Runnable = prompt_d | llm_d.with_structured_output(ExpandedContentStrategyOutput)
+text_chain_d: Runnable = prompt_d | llm_d
 
 def Agent_D(state: StateNDA):
     state = {**state}
 
-    structured_result = structured_chain.invoke(state)
+    structured_result = structured_chain_d.invoke(state)
     text_result = text_chain_d.invoke(state)
 
     return {
@@ -250,22 +246,26 @@ graph.add_node("Agent_C", Agent_C)
 graph.add_node("Agent_D", Agent_D)
 
 
-graph.set_entry_point("Agent_A")
+def router(state: StateNDA) -> Literal["Agent_B", "Agent_C", "Agent_D", "END"]:
+    # This is the router
+    data_A_str = state.get("data_A")
+    if data_A_str:
+        supervisor_output = SupervisorOutput.parse_raw(data_A_str)
+        return supervisor_output.next_node
+    else:
+        # Handle the case where data_A is not available or is None
+        # Perhaps by returning a default next step or raising an error
+        # For now, let's assume a default or end state if no decision is made
+        return "END"
 
-# After each child agent finishes, it returns to Agent_A
+
+graph.add_conditional_edges(
+    "Agent_A",
+    router,
+    {"Agent_B": "Agent_B", "Agent_C": "Agent_C", "Agent_D": "Agent_D", "END": END}
+)
+graph.add_edge(START, "Agent_A")
 graph.add_edge("Agent_B", "Agent_A")
 graph.add_edge("Agent_C", "Agent_A")
 graph.add_edge("Agent_D", "Agent_A")
-
-
-# Define supervisor logic: where to go next
-graph.add_conditional_edges(
-    "Agent_A",
-    lambda state: state["next_node"],
-    {
-        "Agent_B": "Agent_B",
-        "Agent_C": "Agent_C",
-        "Agent_D": "Agent_D",
-        "END": END
-    }
-)
+graph = graph.compile()
