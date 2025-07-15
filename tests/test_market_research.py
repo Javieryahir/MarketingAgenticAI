@@ -19,6 +19,6 @@ def test_market_research_agent():
     assert isinstance(result["market_insights"], dict)
     assert isinstance(result["log"], list)
 
-    # Optional: Print for debugging
-    print("✅ Market Insights:", result["market_insights"])
-    print("📝 Log:", result["log"])
+    # # Print for debugging
+    print("Market Insights:", result["market_insights"])
+    print("Log:", result["log"])
