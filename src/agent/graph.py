@@ -17,6 +17,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool  
 from langgraph.graph import StateGraph, END
 from datetime import datetime
+import re # Added for context extraction
 
 # Import CNR framework
 try:
@@ -26,7 +27,8 @@ try:
         RobustnessTest, CausalRelationship, AgentInteraction,
         DecisionType, ConfidenceLevel, ReasoningStage,
         CampaignStrategy, MarketResearchSummary, AudienceInsightsSummary, 
-        ContentStrategySummary
+        ContentStrategySummary, CounterfactualRequest, GeneratedCounterfactual,
+        CounterfactualResponse
     )
 except ImportError:
     from cnr_models import (
@@ -35,7 +37,8 @@ except ImportError:
         RobustnessTest, CausalRelationship, AgentInteraction,
         DecisionType, ConfidenceLevel, ReasoningStage,
         CampaignStrategy, MarketResearchSummary, AudienceInsightsSummary, 
-        ContentStrategySummary
+        ContentStrategySummary, CounterfactualRequest, GeneratedCounterfactual,
+        CounterfactualResponse
     )
 
 # Load environment variables
@@ -50,7 +53,7 @@ langchain_project = os.getenv("LANGCHAIN_PROJECT")
 
 # Legacy output models for backwards compatibility
 class SupervisorOutput(BaseModel):
-    next_node: Literal["Agent_B", "Agent_C", "Agent_D", "Agent_E", "END"]
+    next_node: Literal["Agent_CF", "Agent_B", "Agent_C", "Agent_D", "Agent_E", "END"]
 
 class MarketResearchOutput(BaseModel):
     trends: list[str]
@@ -89,11 +92,375 @@ class StateNDA(TypedDict, total=False):
     session_id: str
     log_trail: List[Dict[str, Any]]
     
+    # NEW: Counterfactual support
+    context_variables: Dict[str, Any]  # Extracted context variables
+    generated_counterfactuals: Dict[str, List[tuple]]  # Per-agent counterfactuals
+    
     # Legacy compatibility
     data_A: Optional[str]
     data_B: Optional[str] 
     data_C: Optional[str]
     data_D: Optional[str]
+
+# ===== CONTEXT EXTRACTOR =====
+
+class ContextExtractor:
+    """Extracts key variables from user prompt for counterfactual generation."""
+    
+    @staticmethod
+    def extract_context(user_prompt: str) -> Dict[str, Any]:
+        """Extract key context variables from user prompt."""
+        context = {
+            "product_type": None,
+            "target_location": None,
+            "target_audience": [],
+            "budget_mentioned": None,
+            "timeline_mentioned": None,
+            "channels_mentioned": [],
+            "business_type": None,  # B2B vs B2C
+            "industry": None,
+            "campaign_goals": []
+        }
+        
+        # Extract product/service type
+        product_patterns = [
+            r"(?:for|of)\s+(?:a\s+)?([^,.]+?)\s+(?:that|which|targeting)",
+            r"marketing campaign for\s+([^,.]+)",
+            r"plan.*for\s+([^,.]+)"
+        ]
+        for pattern in product_patterns:
+            match = re.search(pattern, user_prompt, re.IGNORECASE)
+            if match:
+                context["product_type"] = match.group(1).strip()
+                break
+        
+        # Extract location
+        location_patterns = [
+            r"in\s+([A-Z][a-zA-Z\s]+?)(?:,|\s+targeting|\.|$)",
+            r"launch.*in\s+([A-Z][a-zA-Z\s]+)",
+            r"market.*in\s+([A-Z][a-zA-Z\s]+)"
+        ]
+        for pattern in location_patterns:
+            match = re.search(pattern, user_prompt, re.IGNORECASE)
+            if match:
+                context["target_location"] = match.group(1).strip()
+                break
+        
+        # Extract audience
+        audience_keywords = ["targeting", "target", "audience", "customers", "users"]
+        for keyword in audience_keywords:
+            pattern = fr"{keyword}[^.]*?([^,.]*(?:professional|tourist|millennial|gen z|consumer|business|student|parent)[^,.]*)"
+            matches = re.findall(pattern, user_prompt, re.IGNORECASE)
+            context["target_audience"].extend([m.strip() for m in matches])
+        
+        # Extract business type
+        if re.search(r"b2b|business.to.business|businesses|enterprises", user_prompt, re.IGNORECASE):
+            context["business_type"] = "B2B"
+        elif re.search(r"b2c|business.to.consumer|consumers|customers", user_prompt, re.IGNORECASE):
+            context["business_type"] = "B2C"
+        
+        # Extract channels
+        channel_keywords = ["social media", "digital", "content marketing", "influencer", "email", "seo", "paid ads", "video", "blog"]
+        for keyword in channel_keywords:
+            if keyword.lower() in user_prompt.lower():
+                context["channels_mentioned"].append(keyword)
+        
+        # Extract timeline
+        timeline_patterns = [
+            r"(\d+)\s+(?:month|week|day)s?",
+            r"(q[1-4]|quarter)",
+            r"(launch|go.live|start).*(?:in|by)\s+([^,.]+)"
+        ]
+        for pattern in timeline_patterns:
+            match = re.search(pattern, user_prompt, re.IGNORECASE)
+            if match:
+                context["timeline_mentioned"] = match.group(0)
+                break
+        
+        return context
+
+# ===== COUNTERFACTUAL GENERATOR =====
+
+class CounterfactualGenerator:
+    """Generates contextual counterfactuals for different agent types."""
+    
+    def __init__(self):
+        self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.7)
+        self.context_extractor = ContextExtractor()
+    
+    def generate_for_agent(self, agent_type: str, user_prompt: str, context_variables: Dict[str, Any]) -> List[tuple]:
+        """Generate counterfactuals for a specific agent type."""
+        
+        # Get agent-specific prompt
+        prompt = self._get_agent_prompt(agent_type)
+        
+        try:
+            # Generate counterfactuals using LLM
+            chain = prompt | self.llm.with_structured_output(CounterfactualResponse)
+            
+            response = chain.invoke({
+                "user_prompt": user_prompt,
+                "context_variables": json.dumps(context_variables, indent=2),
+                "agent_type": agent_type
+            })
+            
+            # Convert to tuple format for existing system compatibility
+            cf_tuples = []
+            for cf in response.counterfactuals:
+                cf_tuples.append((
+                    cf.scenario_description,
+                    cf.likelihood,
+                    cf.projected_outcome,
+                    cf.impact_assessment
+                ))
+            
+            return cf_tuples
+            
+        except Exception as e:
+            # Fallback to generic counterfactuals if generation fails
+            return self._get_fallback_counterfactuals(agent_type)
+    
+    def _get_agent_prompt(self, agent_type: str) -> ChatPromptTemplate:
+        """Get agent-specific prompt for counterfactual generation."""
+        
+        prompts = {
+            "supervisor": ChatPromptTemplate.from_messages([
+                ("system", """
+You are a Counterfactual Generator for the Supervisor Agent in a marketing campaign planning system.
+
+Generate 2-3 workflow and coordination counterfactuals that are specific to this campaign context.
+
+Consider:
+- What if the workflow order was different for THIS specific campaign?
+- What if certain agents were skipped for THIS product/market?
+- What if resource constraints affected agent coordination?
+
+Context Variables: {context_variables}
+User Prompt: {user_prompt}
+
+Generate realistic scenarios with likelihood scores (0.0-1.0) and specific impact assessments.
+Focus on workflow decisions that would be relevant to THIS specific campaign.
+
+Respond with exactly this JSON structure:
+{{
+    "agent_type": "{agent_type}",
+    "counterfactuals": [
+        {{
+            "scenario_description": "If we...",
+            "likelihood": 0.3,
+            "projected_outcome": "Would result in...",
+            "impact_assessment": "Impact would be...",
+            "context_relevance": 0.8
+        }}
+    ],
+    "context_summary": "Key context factors considered"
+}}
+"""),
+                ("user", "Generate counterfactuals for {agent_type} agent")
+            ]),
+            
+            "market_research": ChatPromptTemplate.from_messages([
+                ("system", """
+You are a Counterfactual Generator for the Market Research Agent.
+
+Generate 3-4 market-specific counterfactuals based on the user's campaign context.
+
+Consider the specific product, location, and market mentioned in the user prompt:
+- What if market conditions were different in THIS specific location?
+- What if THIS specific product faced different competitive pressures?
+- What if market trends shifted for THIS industry/product category?
+- What if research scope/budget was different for THIS campaign?
+
+Context Variables: {context_variables}
+User Prompt: {user_prompt}
+
+Make scenarios specific to the product, market, and location mentioned.
+Use realistic likelihood scores and detailed impact assessments.
+
+Respond with exactly this JSON structure:
+{{
+    "agent_type": "{agent_type}",
+    "counterfactuals": [
+        {{
+            "scenario_description": "If market...",
+            "likelihood": 0.4,
+            "projected_outcome": "Would require...",
+            "impact_assessment": "Would change...",
+            "context_relevance": 0.9
+        }}
+    ],
+    "context_summary": "Market-specific factors analyzed"
+}}
+"""),
+                ("user", "Generate counterfactuals for {agent_type} agent")
+            ]),
+            
+            "audience_analysis": ChatPromptTemplate.from_messages([
+                ("system", """
+You are a Counterfactual Generator for the Audience Analysis Agent.
+
+Generate 3-4 audience-specific counterfactuals based on the user's target audience and context.
+
+Consider the specific audience segments mentioned in the user prompt:
+- What if the target audience had different characteristics than assumed?
+- What if audience preferences in THIS location were different?
+- What if budget/channels limited how we could reach THIS specific audience?
+- What if the audience was more/less receptive to THIS specific product?
+
+Context Variables: {context_variables}
+User Prompt: {user_prompt}
+
+Make scenarios specific to the mentioned target audience, location, and product.
+Consider cultural, demographic, and behavioral variations that could affect THIS campaign.
+
+Respond with exactly this JSON structure:
+{{
+    "agent_type": "{agent_type}",
+    "counterfactuals": [
+        {{
+            "scenario_description": "If audience...",
+            "likelihood": 0.4,
+            "projected_outcome": "Would need...",
+            "impact_assessment": "Would require...",
+            "context_relevance": 0.8
+        }}
+    ],
+    "context_summary": "Audience-specific considerations"
+}}
+"""),
+                ("user", "Generate counterfactuals for {agent_type} agent")
+            ]),
+            
+            "content_strategy": ChatPromptTemplate.from_messages([
+                ("system", """
+You are a Counterfactual Generator for the Content Strategy Agent.
+
+Generate 3-4 content-specific counterfactuals based on the user's campaign context.
+
+Consider the specific product, audience, and channels mentioned:
+- What if content production constraints were different for THIS campaign?
+- What if THIS specific audience preferred different content formats?
+- What if regulatory/cultural factors in THIS location affected content strategy?
+- What if seasonal factors affected content timing for THIS product?
+
+Context Variables: {context_variables}
+User Prompt: {user_prompt}
+
+Make scenarios specific to the product type, target audience, and location.
+Consider practical content creation and distribution challenges.
+
+Respond with exactly this JSON structure:
+{{
+    "agent_type": "{agent_type}",
+    "counterfactuals": [
+        {{
+            "scenario_description": "If content...",
+            "likelihood": 0.3,
+            "projected_outcome": "Would adapt...",
+            "impact_assessment": "Could maintain...",
+            "context_relevance": 0.7
+        }}
+    ],
+    "context_summary": "Content-specific factors"
+}}
+"""),
+                ("user", "Generate counterfactuals for {agent_type} agent")
+            ]),
+            
+            "campaign_generator": ChatPromptTemplate.from_messages([
+                ("system", """
+You are a Counterfactual Generator for the Campaign Strategy Generator.
+
+Generate 3-4 high-level strategic counterfactuals that consider the overall campaign context.
+
+Consider the complete campaign picture:
+- What if overall market conditions changed for THIS specific context?
+- What if budget/timeline constraints were different for THIS campaign?
+- What if competitive responses were different in THIS market?
+- What if success metrics needed to be different for THIS product/audience?
+
+Context Variables: {context_variables}
+User Prompt: {user_prompt}
+
+Make scenarios that consider the integrated strategy implications.
+Focus on campaign-level decisions that would affect overall success.
+
+Respond with exactly this JSON structure:
+{{
+    "agent_type": "{agent_type}",
+    "counterfactuals": [
+        {{
+            "scenario_description": "If strategy...",
+            "likelihood": 0.3,
+            "projected_outcome": "Would adapt...",
+            "impact_assessment": "Demonstrates...",
+            "context_relevance": 0.8
+        }}
+    ],
+    "context_summary": "Strategic considerations"
+}}
+"""),
+                ("user", "Generate counterfactuals for {agent_type} agent")
+            ])
+        }
+        
+        return prompts.get(agent_type, self._get_generic_prompt())
+    
+    def _get_generic_prompt(self) -> ChatPromptTemplate:
+        """Generic fallback prompt."""
+        return ChatPromptTemplate.from_messages([
+            ("system", """
+Generate 3 relevant counterfactual scenarios based on the user's campaign context.
+
+Context Variables: {context_variables}
+User Prompt: {user_prompt}
+
+Respond with exactly this JSON structure:
+{{
+    "agent_type": "{agent_type}",
+    "counterfactuals": [
+        {{
+            "scenario_description": "If...",
+            "likelihood": 0.3,
+            "projected_outcome": "Would...",
+            "impact_assessment": "Impact...",
+            "context_relevance": 0.6
+        }}
+    ],
+    "context_summary": "General considerations"
+}}
+"""),
+            ("user", "Generate counterfactuals for {agent_type} agent")
+        ])
+    
+    def _get_fallback_counterfactuals(self, agent_type: str) -> List[tuple]:
+        """Provide fallback counterfactuals if generation fails."""
+        fallbacks = {
+            "supervisor": [
+                ("If workflow order was different", 0.3, "Different information flow", "Medium impact on coordination"),
+                ("If agent specialization was bypassed", 0.2, "Reduced analysis quality", "High impact on strategy")
+            ],
+            "market_research": [
+                ("If market conditions changed significantly", 0.4, "Strategy adaptation needed", "High impact on positioning"),
+                ("If competitive landscape shifted", 0.3, "Repositioning required", "Medium impact on strategy")
+            ],
+            "audience_analysis": [
+                ("If target audience preferences differed", 0.4, "Channel and messaging adjustments", "Medium-high impact"),
+                ("If audience accessibility was limited", 0.3, "Alternative targeting needed", "Medium impact on reach")
+            ],
+            "content_strategy": [
+                ("If production constraints were tighter", 0.3, "Format optimization needed", "Medium impact on output"),
+                ("If content preferences varied", 0.4, "Strategy refinement required", "Medium impact on engagement")
+            ],
+            "campaign_generator": [
+                ("If market conditions evolved", 0.3, "Strategic flexibility needed", "Medium impact on adaptation"),
+                ("If resource constraints changed", 0.4, "Scope adjustment required", "Medium impact on execution")
+            ]
+        }
+        
+        return fallbacks.get(agent_type, [
+            ("If conditions changed", 0.3, "Adaptation needed", "Medium impact")
+        ])
 
 # ===== ASSEMBLER FUNCTIONS FOR CNR REASONING =====
 
@@ -233,6 +600,106 @@ def create_reasoning_packet(
 
 # ===== AGENT IMPLEMENTATIONS WITH CNR =====
 
+# Counterfactual Generator Agent (Agent_CF) - NEW
+llm_cf = ChatOpenAI(model="gpt-4o-mini", temperature=0.3)  # Lower temp for consistency
+
+def Agent_CF(state: StateNDA):
+    """Counterfactual Generator Agent - runs early to generate context-specific counterfactuals."""
+    
+    # Extract user prompt
+    messages = state.get('messages', [])
+    user_prompt = ""
+    if messages:
+        # Get the last human message
+        for msg in reversed(messages):
+            if hasattr(msg, 'content'):
+                user_prompt = str(msg.content)
+                break
+    
+    if not user_prompt:
+        user_prompt = "Marketing campaign planning"
+    
+    # Initialize counterfactual generator
+    cf_generator = CounterfactualGenerator()
+    
+    # Extract context variables
+    context_variables = cf_generator.context_extractor.extract_context(user_prompt)
+    
+    # Generate counterfactuals for each agent type
+    agent_types = ["supervisor", "market_research", "audience_analysis", "content_strategy", "campaign_generator"]
+    generated_counterfactuals = {}
+    total_generated = 0
+    
+    for agent_type in agent_types:
+        try:
+            cf_tuples = cf_generator.generate_for_agent(agent_type, user_prompt, context_variables)
+            generated_counterfactuals[agent_type] = cf_tuples
+            total_generated += len(cf_tuples)
+        except Exception as e:
+            # Use fallback counterfactuals
+            fallback_cfs = cf_generator._get_fallback_counterfactuals(agent_type)
+            generated_counterfactuals[agent_type] = fallback_cfs
+            total_generated += len(fallback_cfs)
+    
+    # Create reasoning packet for the counterfactual generation process
+    evidence_items = [
+        ("research", "Context Extraction", f"Identified {len([v for v in context_variables.values() if v])} context variables", 0.9, 0.95, True),
+        ("research", "Counterfactual Creation", f"Generated {total_generated} scenarios across {len(agent_types)} agent types", 0.85, 0.9, True),
+        ("expert_opinion", "LLM Analysis", f"Context-aware counterfactuals for {context_variables.get('product_type', 'campaign')}", 0.8, 0.9, True)
+    ]
+    
+    counterfactuals = [
+        ("If context extraction missed key variables", 0.2, "Less relevant counterfactuals generated", "Medium impact on reasoning quality"),
+        ("If LLM generated generic scenarios", 0.3, "Reduced contextual relevance", "High impact on counterfactual value")
+    ]
+    
+    reasoning_packet = create_reasoning_packet(
+        agent_id="Agent_CF",
+        agent_name="Counterfactual Generator",
+        decision_statement=f"Generated {total_generated} context-specific counterfactuals for all {len(agent_types)} agents",
+        decision_type=DecisionType.ANALYTICAL,
+        detailed_rationale=f"Analyzed user prompt for '{context_variables.get('product_type', 'campaign')}' in '{context_variables.get('target_location', 'unspecified location')}' targeting '{', '.join(context_variables.get('target_audience', ['general audience']))}' and generated contextually relevant counterfactuals for each specialist agent.",
+        key_factors=[
+            "Context variable extraction",
+            "Domain-specific scenario generation", 
+            "Likelihood assessment",
+            "Impact analysis customization",
+            "Agent-specific relevance"
+        ],
+        evidence_items=evidence_items,
+        counterfactuals=counterfactuals,
+        session_id=state.get('session_id', str(uuid.uuid4())),
+        confidence_score=0.88,
+        primary_objective="Generate contextually relevant counterfactuals for enhanced reasoning",
+        decision_context="Pre-analysis counterfactual generation phase",
+        success_metrics=["Context extraction accuracy", "Counterfactual relevance", "Agent-specific alignment"]
+    )
+    
+    # Update state
+    reasoning_packets = state.get('reasoning_packets', [])
+    reasoning_packets.append(reasoning_packet.to_json())
+    
+    log_entry = {
+        "timestamp": datetime.now().isoformat(),
+        "agent": "Agent_CF",
+        "action": "counterfactual_generation",
+        "context_variables_extracted": len([v for v in context_variables.values() if v]),
+        "total_counterfactuals_generated": total_generated,
+        "agent_types_processed": len(agent_types),
+        "reasoning_id": reasoning_packet.header.packet_id
+    }
+    
+    log_trail = state.get('log_trail', [])
+    log_trail.append(log_entry)
+    
+    return {
+        "context_variables": context_variables,
+        "generated_counterfactuals": generated_counterfactuals,
+        "reasoning_packets": reasoning_packets,
+        "log_trail": log_trail,
+        "messages": f"Generated {total_generated} contextual counterfactuals based on campaign context: {context_variables.get('product_type', 'product')} in {context_variables.get('target_location', 'market')}"
+    }
+
 # Supervisor Agent (Agent_A) - CNR Enhanced
 llm_a = ChatOpenAI(model="gpt-4o-mini")
 
@@ -241,17 +708,21 @@ supervisor_prompt = ChatPromptTemplate.from_messages([
 You are the Supervisor Agent for a marketing campaign planning system. Your role is to coordinate specialist agents and make routing decisions.
 
 CRITICAL: You must analyze the current state and decide which agent should be called next. Consider:
+- Agent_CF: Counterfactual Generator (generate context-specific counterfactuals) - MUST RUN FIRST
 - Agent_B: Market Research (analyze trends, competitors, positioning)
 - Agent_C: Audience Analysis (develop personas, segmentation, channels)  
 - Agent_D: Content Strategy (create content calendar and strategic pieces)
 - Agent_E: Campaign Generator (synthesize final campaign strategy)
 
 Recommended workflow:
-1. Start with Agent_B for market research
-2. Then Agent_C for audience analysis
-3. Then Agent_D for content strategy
-4. Then Agent_E to generate final campaign
-5. END when complete
+1. FIRST: Agent_CF to generate context-specific counterfactuals
+2. Then Agent_B for market research
+3. Then Agent_C for audience analysis
+4. Then Agent_D for content strategy
+5. Then Agent_E to generate final campaign
+6. END when complete
+
+Check the state to see if counterfactuals have been generated. If not, route to Agent_CF first.
 
 Respond with your routing decision and reasoning for why this agent should be called next.
 """),
@@ -277,10 +748,12 @@ def Agent_A(state: StateNDA):
         ("precedent", "Workflow Standards", "Following established agent workflow", 0.95, 0.9, True)
     ]
     
-    counterfactuals = [
-        ("If we skipped market research", 0.3, "Poor audience targeting", "High negative impact on campaign effectiveness"),
-        ("If we ran agents in different order", 0.4, "Sub-optimal information flow", "Medium impact on strategy coherence")
-    ]
+    # Get dynamic counterfactuals instead of static ones
+    counterfactuals = state.get('generated_counterfactuals', {}).get('supervisor', [
+        # Fallback to generic if generation failed
+        ("If workflow order was different", 0.3, "Different information flow", "Medium impact on coordination"),
+        ("If agent specialization was bypassed", 0.2, "Reduced analysis quality", "High impact on strategy")
+    ])
     
     reasoning_packet = create_reasoning_packet(
         agent_id="Agent_A",
@@ -359,11 +832,12 @@ def Agent_B(state: StateNDA):
         ("expert_opinion", "LLM Analysis", structured_result.insights_summary, 0.9, 0.95, True)
     ]
     
-    counterfactuals = [
-        ("If we focused on different market segment", 0.4, "Different competitive landscape", "Would require different positioning strategy"),
-        ("If market conditions were more volatile", 0.3, "Higher uncertainty in trends", "Would need more conservative positioning"),
-        ("If we had larger budget for research", 0.2, "More comprehensive data", "Could identify niche opportunities")
-    ]
+    # Get dynamic counterfactuals instead of static ones
+    counterfactuals = state.get('generated_counterfactuals', {}).get('market_research', [
+        # Fallback to generic if generation failed
+        ("If market conditions changed significantly", 0.4, "Strategy adaptation needed", "High impact on positioning"),
+        ("If competitive landscape shifted", 0.3, "Repositioning required", "Medium impact on strategy")
+    ])
     
     reasoning_packet = create_reasoning_packet(
         agent_id="Agent_B",
@@ -448,11 +922,12 @@ def Agent_C(state: StateNDA):
         ("expert_opinion", "Segmentation Strategy", structured_result.segmentation_strategy, 0.9, 0.95, True)
     ]
     
-    counterfactuals = [
-        ("If we targeted B2B instead of B2C", 0.5, "Role-based personas vs lifestyle-based", "Would need professional context focus"),
-        ("If budget limited channel options", 0.3, "Focus on top 2-3 channels", "Could still maintain effectiveness"),
-        ("If audience was more niche", 0.4, "Fewer but more detailed personas", "Higher targeting precision")
-    ]
+    # Get dynamic counterfactuals instead of static ones
+    counterfactuals = state.get('generated_counterfactuals', {}).get('audience_analysis', [
+        # Fallback to generic if generation failed
+        ("If target audience preferences differed", 0.4, "Channel and messaging adjustments", "Medium-high impact"),
+        ("If audience accessibility was limited", 0.3, "Alternative targeting needed", "Medium impact on reach")
+    ])
     
     reasoning_packet = create_reasoning_packet(
         agent_id="Agent_C",
@@ -538,11 +1013,12 @@ def Agent_D(state: StateNDA):
         ("expert_opinion", "Strategic Alignment", "Content aligned with audience personas and market positioning", 0.9, 0.95, True)
     ]
     
-    counterfactuals = [
-        ("If production budget was 50% lower", 0.3, "Fewer video pieces, more text content", "Could maintain impact with cost-effective formats"),
-        ("If timeline was compressed", 0.4, "Prioritize high-impact pieces", "Focus on content with highest ROI"),
-        ("If different channels were chosen", 0.3, "Adapted content formats", "Content types would shift to match channel requirements")
-    ]
+    # Get dynamic counterfactuals instead of static ones
+    counterfactuals = state.get('generated_counterfactuals', {}).get('content_strategy', [
+        # Fallback to generic if generation failed
+        ("If production constraints were tighter", 0.3, "Format optimization needed", "Medium impact on output"),
+        ("If content preferences varied", 0.4, "Strategy refinement required", "Medium impact on engagement")
+    ])
     
     reasoning_packet = create_reasoning_packet(
         agent_id="Agent_D",
@@ -670,11 +1146,12 @@ def Agent_E(state: StateNDA):
         ("research", "Content Strategy", f"Content strategy with {len(content_data.get('items', []))} pieces" if content_data else "Content strategy completed", 0.9, 0.95, True)
     ]
     
-    counterfactuals = [
-        ("If we had different market conditions", 0.3, "Strategy would adapt to new conditions", "Demonstrates strategy flexibility"),
-        ("If budget constraints were tighter", 0.4, "Prioritized approach with phased implementation", "Strategy remains viable with scaling"),
-        ("If timeline was accelerated", 0.3, "Compressed phases with focus on high-impact elements", "Core strategy elements remain intact")
-    ]
+    # Get dynamic counterfactuals instead of static ones
+    counterfactuals = state.get('generated_counterfactuals', {}).get('campaign_generator', [
+        # Fallback to generic if generation failed
+        ("If market conditions evolved", 0.3, "Strategic flexibility needed", "Medium impact on adaptation"),
+        ("If resource constraints changed", 0.4, "Scope adjustment required", "Medium impact on execution")
+    ])
     
     reasoning_packet = create_reasoning_packet(
         agent_id="Agent_E",
@@ -731,10 +1208,12 @@ graph.add_node("Agent_B", Agent_B)  # Market Research
 graph.add_node("Agent_C", Agent_C)  # Audience Analysis
 graph.add_node("Agent_D", Agent_D)  # Content Strategy
 graph.add_node("Agent_E", Agent_E)  # Campaign Generator
+graph.add_node("Agent_CF", Agent_CF) # Counterfactual Generator
 
 graph.set_entry_point("Agent_A")
 
 # After each specialist agent finishes, return to supervisor
+graph.add_edge("Agent_CF", "Agent_A")  # Counterfactual generator returns to supervisor
 graph.add_edge("Agent_B", "Agent_A")
 graph.add_edge("Agent_C", "Agent_A") 
 graph.add_edge("Agent_D", "Agent_A")
@@ -757,6 +1236,7 @@ graph.add_conditional_edges(
     "Agent_A",
     router,
     {
+        "Agent_CF": "Agent_CF",
         "Agent_B": "Agent_B",
         "Agent_C": "Agent_C", 
         "Agent_D": "Agent_D",

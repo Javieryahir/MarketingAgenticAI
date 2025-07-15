@@ -613,6 +613,8 @@ if generate_button and 'plan_result' not in st.session_state:
                 "session_id": f"session_{int(time.time())}",
                 "log_trail": [],
                 "campaign_strategy": None,
+                "context_variables": {},  # NEW: for counterfactual generation
+                "generated_counterfactuals": {},  # NEW: for dynamic counterfactuals
                 "data_A": None,
                 "data_B": None,
                 "data_C": None,
@@ -621,7 +623,7 @@ if generate_button and 'plan_result' not in st.session_state:
             
             # Stream the graph execution
             step_count = 0
-            max_steps = 20  # Increased for new agent
+            max_steps = 25  # Increased for new counterfactual agent
             current_messages = []
             
             for chunk in graph.stream(inputs, {"recursion_limit": 200}, stream_mode="values"):

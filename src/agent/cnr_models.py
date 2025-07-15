@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import uuid
+import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Literal, Union
 from pydantic import BaseModel, Field
@@ -27,6 +28,31 @@ class ReasoningStage(str, Enum):
     EVALUATION = "evaluation"
     DECISION = "decision"
     VALIDATION = "validation"
+
+# ===== NEW COUNTERFACTUAL GENERATION MODELS =====
+
+class CounterfactualRequest(BaseModel):
+    """Request for generating counterfactuals for a specific agent."""
+    agent_type: str = Field(..., description="Type of agent (market_research, audience_analysis, etc.)")
+    user_prompt: str = Field(..., description="Original user campaign brief")
+    current_analysis: Dict[str, Any] = Field(default_factory=dict, description="Current agent's analysis results")
+    context_variables: Dict[str, Any] = Field(default_factory=dict, description="Extracted context variables")
+
+class GeneratedCounterfactual(BaseModel):
+    """A dynamically generated counterfactual scenario."""
+    scenario_description: str = Field(..., description="What-if scenario description")
+    likelihood: float = Field(..., ge=0.0, le=1.0, description="Probability this could occur")
+    projected_outcome: str = Field(..., description="Expected outcome if this scenario occurred")
+    impact_assessment: str = Field(..., description="How this would change the strategy")
+    context_relevance: float = Field(..., ge=0.0, le=1.0, description="How relevant to user's specific context")
+
+class CounterfactualResponse(BaseModel):
+    """Response containing generated counterfactuals for an agent."""
+    agent_type: str = Field(..., description="Agent these counterfactuals are for")
+    counterfactuals: List[GeneratedCounterfactual] = Field(..., description="Generated counterfactual scenarios")
+    context_summary: str = Field(..., description="Summary of key context factors considered")
+
+# ===== EXISTING MODELS CONTINUE =====
 
 class PacketHeader(BaseModel):
     """Header information for a reasoning packet."""
@@ -118,8 +144,7 @@ class AgentInteraction(BaseModel):
     interaction_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     agent_id: str = Field(..., description="ID of the other agent")
     interaction_type: Literal["consultation", "handoff", "collaboration", "feedback"] = Field(...)
-    content: str = Field(..., description="Content of the interaction")
-    outcome: str = Field(..., description="Outcome of the interaction")
+    interaction_summary: str = Field(..., description="Summary of the interaction")
     timestamp: datetime = Field(default_factory=datetime.now)
 
 class ReasoningPacket(BaseModel):
@@ -157,26 +182,24 @@ class CampaignStrategy(BaseModel):
     budget_considerations: str = Field(..., description="Budget and resource considerations")
     competitive_advantages: List[str] = Field(..., description="Key competitive advantages to highlight")
 
+# Placeholder models for agent outputs
 class MarketResearchSummary(BaseModel):
-    """Market research findings summary for campaign strategy."""
-    key_trends: List[str] = Field(..., description="Key market trends identified")
-    competitive_landscape: str = Field(..., description="Summary of competitive landscape")
-    market_opportunities: List[str] = Field(..., description="Identified market opportunities")
-    positioning_recommendation: str = Field(..., description="Recommended market positioning")
+    """Summary of market research analysis."""
+    trends: List[str] = Field(default_factory=list)
+    competitors: List[str] = Field(default_factory=list)
+    insights_summary: str = Field(default="Market analysis completed")
 
 class AudienceInsightsSummary(BaseModel):
-    """Audience insights summary for campaign strategy."""
-    primary_personas: List[str] = Field(..., description="Primary audience personas")
-    key_motivations: List[str] = Field(..., description="Key audience motivations")
-    preferred_touchpoints: List[str] = Field(..., description="Preferred customer touchpoints")
-    messaging_preferences: str = Field(..., description="How audience prefers to receive messages")
+    """Summary of audience insights."""
+    personas: List[str] = Field(default_factory=list)
+    preferred_channels: List[str] = Field(default_factory=list)
+    segmentation_strategy: str = Field(default="Audience segmentation completed")
 
 class ContentStrategySummary(BaseModel):
-    """Content strategy summary for campaign strategy."""
-    content_pillars: List[str] = Field(..., description="Main content pillars")
-    content_mix: Dict[str, int] = Field(..., description="Distribution of content types")
-    publishing_cadence: str = Field(..., description="Recommended publishing frequency")
-    key_content_pieces: List[str] = Field(..., description="Priority content pieces")
+    """Summary of content strategy."""
+    content_pieces: List[str] = Field(default_factory=list)
+    content_types: List[str] = Field(default_factory=list)
+    strategy_overview: str = Field(default="Content strategy completed")
 
 # Enhanced state management
 class StateNDA(BaseModel):
@@ -189,6 +212,10 @@ class StateNDA(BaseModel):
     content_strategy: Optional[ContentStrategySummary] = Field(None)
     log_trail: List[Dict[str, Any]] = Field(default_factory=list)
     session_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    
+    # NEW: Counterfactual support
+    context_variables: Dict[str, Any] = Field(default_factory=dict, description="Extracted context variables")
+    generated_counterfactuals: Dict[str, List[tuple]] = Field(default_factory=dict, description="Per-agent counterfactuals")
     
     # Legacy compatibility
     data_A: Optional[str] = Field(None)
