@@ -11,7 +11,7 @@ from typing import Any, Dict, TypedDict
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph
 
-from agent.market_research import market_research_agent # Import the market research agent for Google Trends API 
+from agent.tools.market_research import market_research_agent # Import the market research agent for Google Trends API 
 
 
 class Configuration(TypedDict):
