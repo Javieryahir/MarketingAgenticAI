@@ -11,6 +11,8 @@ from typing import Any, Dict, TypedDict
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph
 
+from agent.market_research import market_research_agent # Import the market research agent for Google Trends API 
+
 
 class Configuration(TypedDict):
     """Configurable parameters for the agent.
@@ -45,10 +47,18 @@ async def call_model(state: State, config: RunnableConfig) -> Dict[str, Any]:
     }
 
 
-# Define the graph
+# # Define the graph
+# graph = (
+#     StateGraph(State, config_schema=Configuration)
+#     .add_node(call_model)
+#     .add_edge("__start__", "call_model")
+#     .compile(name="New Graph")
+# )
+
+# Define the graph of the market research agent
 graph = (
     StateGraph(State, config_schema=Configuration)
-    .add_node(call_model)
-    .add_edge("__start__", "call_model")
-    .compile(name="New Graph")
+    .add_node("market_research", market_research_agent)
+    .add_edge("__start__", "market_research")
+    .compile(name="MarketingGraph")
 )
