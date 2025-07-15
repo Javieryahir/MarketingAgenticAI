@@ -8,3 +8,4 @@ langchain-openai
 psycopg[binary]
 typing-extensions
 langgraph-cli[inmem]
+streamlit
