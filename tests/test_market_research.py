@@ -1,6 +1,6 @@
 import asyncio
 from types import SimpleNamespace
-from agent.market_research import market_research_agent
+from agent.tools.market_research import market_research_agent
 
 def test_market_research_agent():
     # Simulate LangGraph state using SimpleNamespace

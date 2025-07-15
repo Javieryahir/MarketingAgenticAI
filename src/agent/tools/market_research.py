@@ -27,4 +27,3 @@ async def market_research_agent(state, config: Dict[str, Any]) -> Dict[str, Any]
         "market_insights": trends_data,
         "log": (state.log or []) + [f"MarketResearchAgent: Found trends for {keywords}."]
     }
-
