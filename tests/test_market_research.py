@@ -2,20 +2,23 @@ import asyncio
 from types import SimpleNamespace
 from agent.market_research import market_research_agent
 
-# Simulated State object (LangGraph would normally manage this)
-state = SimpleNamespace(
-    prompt="Launch a TikTok campaign for a biodegradable water bottle",
-    log=[]
-)
+def test_market_research_agent():
+    # Simulate LangGraph state using SimpleNamespace
+    state = SimpleNamespace(
+        prompt="Launch a TikTok campaign for a biodegradable water bottle",
+        log=[]
+    )
+    config = {}
 
-config = {}
+    # Run the async agent logic synchronously via asyncio
+    result = asyncio.run(market_research_agent(state, config))
 
-# Run the async agent function using asyncio
-async def run_test():
-    result = await market_research_agent(state, config)
-    print("📊 Market Insights:\n", result["market_insights"])
-    print("\n📝 Log:\n", result["log"])
+    # Assert expected structure of result
+    assert "market_insights" in result
+    assert "log" in result
+    assert isinstance(result["market_insights"], dict)
+    assert isinstance(result["log"], list)
 
-# Execute the test
-if __name__ == "__main__":
-    asyncio.run(run_test())
+    # Optional: Print for debugging
+    print("✅ Market Insights:", result["market_insights"])
+    print("📝 Log:", result["log"])
