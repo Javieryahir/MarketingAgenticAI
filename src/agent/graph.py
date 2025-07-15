@@ -155,7 +155,7 @@ def Agent_B(state: StateNDA):
         "data_B": json.dumps(structured_result.dict(), ensure_ascii=False),
         "messages": text_result
     }
-
+#changes
 #AudienceAgent = Agent C
 llm_c = ChatOpenAI(model="gpt-4o-mini")
 llm_c_with_tools = llm_c.bind_tools([])
