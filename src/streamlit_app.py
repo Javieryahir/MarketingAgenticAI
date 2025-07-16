@@ -16,7 +16,7 @@ from datetime import datetime
 
 # --- Streamlit User Interface ---
 
-st.set_page_config(page_title="AI Marketing Campaign Planner", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Entangle AI -  Your Marketing Campaign Planner", layout="wide", initial_sidebar_state="expanded")
 
 # Custom CSS for better styling
 st.markdown("""
@@ -114,8 +114,9 @@ st.markdown("""
 # Header
 st.markdown("""
 <div class="main-header">
-    <h1>🤖 AI Marketing Campaign Planner</h1>
-    <p>CNR-Enhanced Multi-Agent AI System for Comprehensive Campaign Strategy</p>
+    <h1>🧠 Entangle AI Marketing Campaign Planner</h1>
+    <p>Powered by ARISE: Adaptive Reasoning and Interactive Strategy Engine</p>
+    <small style="opacity: 0.9;">Multi-Agent AI System with Dynamic Counterfactual Reasoning</small>
 </div>
 """, unsafe_allow_html=True)
 
@@ -165,10 +166,10 @@ with st.sidebar:
             del st.session_state.plan_result
             st.rerun()
 
-# --- Helper Functions for CNR Display ---
+# --- Helper Functions for ARISE Display ---
 
 def display_reasoning_packet(packet_json: str, agent_icon: str = "🤖"):
-    """Display a complete CNR reasoning packet."""
+    """Display a complete ARISE reasoning packet."""
     try:
         packet = ReasoningPacket.from_json(packet_json)
         
@@ -506,7 +507,7 @@ if 'plan_result' in st.session_state:
     result_data = st.session_state.plan_result
     
     # Main campaign plan display using tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["🎯 Campaign Strategy", "🧠 CNR Reasoning", "📊 Component Analysis", "🔧 Technical Data"])
+    tab1, tab2, tab3, tab4 = st.tabs(["🎯 Campaign Strategy", "🧠 ARISE Reasoning", "📊 Component Analysis", "🔧 Technical Data"])
     
     with tab1:
         st.markdown("## 🎉 **Marketing Campaign Strategy**")
@@ -533,7 +534,8 @@ if 'plan_result' in st.session_state:
             display_execution_log(result_data['log_trail'])
     
     with tab2:
-        st.markdown("## 🧠 **Cognitive Narrative Reasoning (CNR) Analysis**")
+        st.markdown("## 🧠 **ARISE Reasoning Analysis**")
+        st.info("📋 **Understanding the Decision Process:** This section shows how each Entangle AI agent used ARISE (Adaptive Reasoning and Interactive Strategy Engine) to make decisions, including evidence evaluation, counterfactual analysis, and causal relationships.")
         st.markdown("*Detailed decision-making process and reasoning for each agent*")
         
         # Display all reasoning packets
@@ -544,6 +546,7 @@ if 'plan_result' in st.session_state:
             
             agent_icons = {
                 "Agent_A": "🎯",
+                "Agent_CF": "🧠",
                 "Agent_B": "📊", 
                 "Agent_C": "👥",
                 "Agent_D": "📝",
@@ -558,7 +561,7 @@ if 'plan_result' in st.session_state:
                 except Exception as e:
                     st.error(f"Error parsing reasoning packet: {str(e)}")
         else:
-            st.warning("No CNR reasoning packets found. The system may be running in legacy mode.")
+            st.warning("No ARISE reasoning packets found. The system may be running in legacy mode.")
     
     with tab3:
         st.markdown("## 📊 **Detailed Component Analysis**")
@@ -606,7 +609,7 @@ if generate_button and 'plan_result' not in st.session_state:
         status_text = st.empty()
         live_log = st.empty()
         
-        with st.spinner("🤖 AI agents are collaborating with CNR reasoning..."):
+        with st.spinner("🧠 Entangle AI agents are collaborating with ARISE reasoning..."):
             inputs = {
                 "messages": [HumanMessage(content=campaign_brief)],
                 "reasoning_packets": [],
@@ -655,7 +658,7 @@ if generate_button and 'plan_result' not in st.session_state:
         
         # Get final state
         progress_bar.progress(1.0)
-        status_text.text("✅ Finalizing campaign strategy with CNR analysis...")
+        status_text.text("✅ Finalizing campaign strategy with ARISE analysis...")
         
         final_state = graph.invoke(inputs, {"recursion_limit": 200})
         

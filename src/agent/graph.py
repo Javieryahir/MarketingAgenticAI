@@ -19,7 +19,7 @@ from langgraph.graph import StateGraph, END
 from datetime import datetime
 import re # Added for context extraction
 
-# Import CNR framework
+# Import ARISE framework
 try:
     from .cnr_models import (
         ReasoningPacket, PacketHeader, CoreDecision, NarrativeLayer, 
@@ -84,7 +84,7 @@ class ContentItem(BaseModel):
 class ExpandedContentStrategyOutput(BaseModel):
     items: list[ContentItem]
 
-# Enhanced state with CNR support
+# Enhanced state with ARISE support
 class StateNDA(TypedDict, total=False):
     messages: Annotated[list[AnyMessage], add_messages]
     reasoning_packets: List[str]  # JSON strings of ReasoningPackets
@@ -462,7 +462,7 @@ Respond with exactly this JSON structure:
             ("If conditions changed", 0.3, "Adaptation needed", "Medium impact")
         ])
 
-# ===== ASSEMBLER FUNCTIONS FOR CNR REASONING =====
+# ===== ASSEMBLER FUNCTIONS FOR ARISE REASONING =====
 
 def create_reasoning_packet(
     agent_id: str,
@@ -598,7 +598,7 @@ def create_reasoning_packet(
         metadata=kwargs.get('metadata', {})
     )
 
-# ===== AGENT IMPLEMENTATIONS WITH CNR =====
+# ===== AGENT IMPLEMENTATIONS WITH ARISE =====
 
 # Counterfactual Generator Agent (Agent_CF) - NEW
 llm_cf = ChatOpenAI(model="gpt-4o-mini", temperature=0.3)  # Lower temp for consistency
@@ -700,7 +700,7 @@ def Agent_CF(state: StateNDA):
         "messages": f"Generated {total_generated} contextual counterfactuals based on campaign context: {context_variables.get('product_type', 'product')} in {context_variables.get('target_location', 'market')}"
     }
 
-# Supervisor Agent (Agent_A) - CNR Enhanced
+# Supervisor Agent (Agent_A) - ARISE Enhanced
 llm_a = ChatOpenAI(model="gpt-4o-mini")
 
 supervisor_prompt = ChatPromptTemplate.from_messages([
@@ -730,7 +730,7 @@ Respond with your routing decision and reasoning for why this agent should be ca
 ])
 
 def Agent_A(state: StateNDA):
-    """Supervisor Agent with CNR reasoning."""
+    """Supervisor Agent with ARISE reasoning."""
     
     # Get LLM decision
     structured_chain = supervisor_prompt | llm_a.with_structured_output(SupervisorOutput)
@@ -742,7 +742,7 @@ def Agent_A(state: StateNDA):
     # Extract routing decision
     next_node = structured_result.next_node
     
-    # Create detailed CNR reasoning packet
+    # Create detailed ARISE reasoning packet
     evidence_items = [
         ("expert_opinion", "LLM Analysis", f"Routing decision: {next_node}", 0.9, 0.95, True),
         ("precedent", "Workflow Standards", "Following established agent workflow", 0.95, 0.9, True)
@@ -794,7 +794,7 @@ def Agent_A(state: StateNDA):
         "session_id": state.get('session_id', str(uuid.uuid4()))
     }
 
-# Market Research Agent (Agent_B) - CNR Enhanced
+# Market Research Agent (Agent_B) - ARISE Enhanced
 llm_b = ChatOpenAI(model="gpt-4o-mini")
 
 market_research_prompt = ChatPromptTemplate.from_messages([
@@ -813,7 +813,7 @@ Provide clear, actionable insights that will inform audience analysis and conten
 ])
 
 def Agent_B(state: StateNDA):
-    """Market Research Agent with CNR reasoning."""
+    """Market Research Agent with ARISE reasoning."""
     
     # Get LLM analysis
     structured_chain = market_research_prompt | llm_b.with_structured_output(MarketResearchOutput)
@@ -822,7 +822,7 @@ def Agent_B(state: StateNDA):
     structured_result = structured_chain.invoke(state)
     text_result = text_chain.invoke(state)
     
-    # Create comprehensive CNR reasoning packet
+    # Create comprehensive ARISE reasoning packet
     trends_count = len(structured_result.trends)
     competitors_count = len(structured_result.competitors)
     
@@ -885,7 +885,7 @@ def Agent_B(state: StateNDA):
         "log_trail": log_trail
     }
 
-# Audience Analysis Agent (Agent_C) - CNR Enhanced
+# Audience Analysis Agent (Agent_C) - ARISE Enhanced
 llm_c = ChatOpenAI(model="gpt-4o-mini")
 
 audience_prompt = ChatPromptTemplate.from_messages([
@@ -903,7 +903,7 @@ Structure your response for AudienceAgentOutput with complete persona profiles.
 ])
 
 def Agent_C(state: StateNDA):
-    """Audience Analysis Agent with CNR reasoning."""
+    """Audience Analysis Agent with ARISE reasoning."""
     
     # Get LLM analysis
     structured_chain = audience_prompt | llm_c.with_structured_output(AudienceAgentOutput)
@@ -912,7 +912,7 @@ def Agent_C(state: StateNDA):
     structured_result = structured_chain.invoke(state)
     text_result = text_chain.invoke(state)
     
-    # Create CNR reasoning packet
+    # Create ARISE reasoning packet
     personas_count = len(structured_result.personas)
     channels_count = len(structured_result.preferred_channels)
     
@@ -975,7 +975,7 @@ def Agent_C(state: StateNDA):
         "log_trail": log_trail
     }
 
-# Content Strategy Agent (Agent_D) - CNR Enhanced
+# Content Strategy Agent (Agent_D) - ARISE Enhanced
 llm_d = ChatOpenAI(model="gpt-4o-mini")
 
 content_strategy_prompt = ChatPromptTemplate.from_messages([
@@ -994,7 +994,7 @@ Consider audience preferences and market insights for optimal content strategy.
 ])
 
 def Agent_D(state: StateNDA):
-    """Content Strategy Agent with CNR reasoning."""
+    """Content Strategy Agent with ARISE reasoning."""
     
     # Get LLM analysis
     structured_chain = content_strategy_prompt | llm_d.with_structured_output(ExpandedContentStrategyOutput)
@@ -1003,7 +1003,7 @@ def Agent_D(state: StateNDA):
     structured_result = structured_chain.invoke(state)
     text_result = text_chain.invoke(state)
     
-    # Create CNR reasoning packet
+    # Create ARISE reasoning packet
     content_count = len(structured_result.items)
     content_types = set(item.content_type for item in structured_result.items)
     
@@ -1221,7 +1221,7 @@ graph.add_edge("Agent_E", END)  # Campaign generator goes to END
 
 # Router function for supervisor decisions
 def router(state):
-    """Enhanced router with CNR logging."""
+    """Enhanced router with ARISE logging."""
     data_A_str = state.get("data_A")
     if data_A_str:
         try:
